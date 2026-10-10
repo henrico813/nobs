@@ -173,8 +173,10 @@ func handleSearch(req searchRequest) (searchResponse, error) {
 	return resp, nil
 }
 
+// Accepts a vault-relative path or a full path inside the vault, such as one
+// find prints. Other commands accept only vault-relative paths.
 func handleRead(req notePathRequest) (noteResponse, error) {
-	fullPath, relPath, err := resolveExistingMarkdown(req.Path)
+	fullPath, relPath, err := resolveExistingMarkdown(vaultRelativePath(req.Path))
 	if err != nil {
 		return noteResponse{}, err
 	}
@@ -183,6 +185,20 @@ func handleRead(req notePathRequest) (noteResponse, error) {
 		return noteResponse{}, newNOBSError(NOBSErrUnexpected, err.Error())
 	}
 	return noteResponse{Path: relPath, Body: string(body)}, nil
+}
+
+// Turns a full path inside the vault into a vault-relative one. Other paths
+// come back unchanged, and cleanUserPath then refuses any that are full paths.
+func vaultRelativePath(path string) string {
+	cleaned := filepath.Clean(strings.TrimSpace(path))
+	if !filepath.IsAbs(cleaned) {
+		return path
+	}
+	rel, err := filepath.Rel(filepath.Clean(vaultDir()), cleaned)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return path
+	}
+	return filepath.ToSlash(rel)
 }
 
 func handleToday() (noteResponse, error) {
