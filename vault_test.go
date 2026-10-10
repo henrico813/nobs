@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -341,5 +342,50 @@ func TestReadyHealthChecksMountedVault(t *testing.T) {
 				t.Fatalf("readyHealth error = %v, want error: %t", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// find prints full paths, and agents pass them straight to read.
+func TestReadAcceptsFullPathInsideVault(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "Projects"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Projects", "Plan.md"), []byte("note\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OBSIDIAN_VAULT_DIR", root)
+
+	resp, err := handleRead(notePathRequest{Path: filepath.Join(root, "Projects", "Plan.md")})
+
+	if err != nil {
+		t.Fatalf("read full path: %v", err)
+	}
+	if resp.Path != "Projects/Plan.md" || resp.Body != "note\n" {
+		t.Fatalf("unexpected response %#v", resp)
+	}
+}
+
+// A neighboring folder such as Vault-other starts with the vault's name, so a
+// name-prefix check would treat its notes as inside the vault.
+func TestReadRejectsFullPathOutsideVault(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "Vault")
+	sibling := filepath.Join(parent, "Vault-other")
+	for _, dir := range []string{root, sibling} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(sibling, "Plan.md"), []byte("note\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OBSIDIAN_VAULT_DIR", root)
+
+	_, err := handleRead(notePathRequest{Path: filepath.Join(sibling, "Plan.md")})
+
+	var nobsErr *NOBSError
+	if !errors.As(err, &nobsErr) || nobsErr.Code != NOBSErrInvalidPath {
+		t.Fatalf("error = %v, want invalid path", err)
 	}
 }
