@@ -2,7 +2,7 @@
 
 nobs is a small broker and CLI for one Obsidian vault. Run `nobs service` where the vault and `ob` are available, then use the CLI to read, search, change, and sync notes through that broker.
 
-Agents can pass the full path that `nobs find` prints straight to `nobs read`. Other commands take paths relative to the vault, such as `Projects/Plan.md`, and reject absolute paths.
+Agents can pass the full path that `nobs find` prints straight to `nobs read`. Other commands that take a note path need it relative to the vault, such as `Projects/Plan.md`, and reject absolute paths.
 
 ## Build and install
 
