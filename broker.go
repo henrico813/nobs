@@ -39,6 +39,7 @@ func newBrokerMux() *http.ServeMux {
 	mux.HandleFunc("/livez", handleLivez)
 	mux.HandleFunc("/configz", handleConfigz)
 	mux.HandleFunc("/readyz", handleReadyz)
+	mux.HandleFunc("/find", withReadLock(handleFindHTTP))
 	mux.HandleFunc("/search", withReadLock(handleSearchHTTP))
 	mux.HandleFunc("/rg", withReadLock(handleRGHTTP))
 	mux.HandleFunc("/read", withReadLock(handleReadHTTP))
@@ -111,6 +112,24 @@ func handleReadyz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeBrokerJSON(w, map[string]any{"status": "ok"})
+}
+
+func handleFindHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeBrokerError(w, newNOBSError(NOBSErrInvalidArgs, "method must be POST"))
+		return
+	}
+	req, err := decodeBrokerJSON[findRequest](r.Body)
+	if err != nil {
+		writeBrokerError(w, err)
+		return
+	}
+	resp, err := handleFind(req)
+	if err != nil {
+		writeBrokerError(w, err)
+		return
+	}
+	writeBrokerJSON(w, resp)
 }
 
 func handleSearchHTTP(w http.ResponseWriter, r *http.Request) {
@@ -412,7 +431,7 @@ func brokerCommandTimeout(command string) time.Duration {
 		return 3 * time.Minute
 	case "apply-patch":
 		return 30 * time.Second
-	case "search", "rg", "read", "today", "daily":
+	case "find", "search", "rg", "read", "today", "daily":
 		// Reads wait behind a running sync-now, which lasts up to
 		// syncRequestTimeout plus obWaitDelay, and may then scan a large vault.
 		// A queued sync-now or edit ahead of them adds to that wait.

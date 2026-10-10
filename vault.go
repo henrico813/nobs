@@ -56,8 +56,24 @@ func vaultLocation() *time.Location {
 	return loc
 }
 
-// readyHealth proves the mounted vault exists and can accept mutations.
+// Creates and removes .nobs-write-probe to prove the vault is there and
+// writable. Code that must not write uses checkVaultMounted instead.
 func readyHealth() error {
+	if err := checkVaultMounted(); err != nil {
+		return err
+	}
+	probe := filepath.Join(vaultDir(), ".nobs-write-probe")
+	if err := os.WriteFile(probe, []byte("ok\n"), 0o644); err != nil {
+		return newNOBSError(NOBSErrBrokerUnavailable, "vault directory is not writable")
+	}
+	_ = os.Remove(probe)
+	return nil
+}
+
+// Writes nothing. With NOBS_VAULT_IS_MOUNTED=true the vault folder must also
+// contain .obsidian, so an unmounted network drive is an error rather than an
+// empty vault.
+func checkVaultMounted() error {
 	info, err := os.Stat(vaultDir())
 	if err != nil || !info.IsDir() {
 		return newNOBSError(NOBSErrBrokerUnavailable, "vault directory unavailable")
@@ -75,12 +91,39 @@ func readyHealth() error {
 			}
 		}
 	}
-	probe := filepath.Join(vaultDir(), ".nobs-write-probe")
-	if err := os.WriteFile(probe, []byte("ok\n"), 0o644); err != nil {
-		return newNOBSError(NOBSErrBrokerUnavailable, "vault directory is not writable")
-	}
-	_ = os.Remove(probe)
 	return nil
+}
+
+// Calls visit for each Markdown note, skipping hidden folders such as .trash
+// and notes that are links. The vault folder may itself be a link or sit under
+// one. fullPath starts with vaultDir() as
+// configured; relPath uses forward slashes.
+func walkVaultNotes(visit func(fullPath, relPath string) error) error {
+	// WalkDir does not descend into a symlinked root, so walk its target. The
+	// walk never follows links below it, so every note it visits is inside.
+	root, err := filepath.EvalSymlinks(vaultDir())
+	if err != nil {
+		return err
+	}
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if path != root && strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Type()&os.ModeSymlink != 0 || filepath.Ext(d.Name()) != ".md" {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		return visit(filepath.Join(vaultDir(), rel), filepath.ToSlash(rel))
+	})
 }
 
 func handleSearch(req searchRequest) (searchResponse, error) {
@@ -92,31 +135,9 @@ func handleSearch(req searchRequest) (searchResponse, error) {
 		return searchResponse{}, newNOBSError(NOBSErrInvalidArgs, "search query is required")
 	}
 	resp := searchResponse{Matches: make([]searchMatch, 0, 16)}
-	err := filepath.WalkDir(vaultDir(), func(path string, d fs.DirEntry, err error) error {
+	err := walkVaultNotes(func(fullPath, relPath string) error {
+		file, err := os.Open(fullPath)
 		if err != nil {
-			return err
-		}
-		name := d.Name()
-		if d.IsDir() && strings.HasPrefix(name, ".") {
-			if path == vaultDir() {
-				return nil
-			}
-			return filepath.SkipDir
-		}
-		if d.Type()&os.ModeSymlink != 0 || d.IsDir() || filepath.Ext(name) != ".md" {
-			return nil
-		}
-		resolved, err := filepath.EvalSymlinks(path)
-		if err != nil || !withinVault(resolved) {
-			return nil
-		}
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(vaultDir(), path)
-		if err != nil {
-			_ = file.Close()
 			return err
 		}
 		scanner := bufio.NewScanner(file)
@@ -125,7 +146,7 @@ func handleSearch(req searchRequest) (searchResponse, error) {
 			line++
 			text := scanner.Text()
 			if strings.Contains(strings.ToLower(text), query) {
-				resp.Matches = append(resp.Matches, searchMatch{Path: filepath.ToSlash(rel), Line: line, Text: text})
+				resp.Matches = append(resp.Matches, searchMatch{Path: relPath, Line: line, Text: text})
 				if len(resp.Matches) >= 50 {
 					break
 				}
@@ -385,6 +406,8 @@ func findDailyNote(date string) (string, string, error) {
 	return fullPath, filepath.ToSlash(rel), nil
 }
 
+// Rejects a note that is missing, is a link, or resolves outside the vault, and
+// returns its full and vault-relative paths.
 func resolveExistingMarkdown(path string) (string, string, error) {
 	relPath, err := cleanUserPath(path)
 	if err != nil {
@@ -401,8 +424,12 @@ func resolveExistingMarkdown(path string) (string, string, error) {
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return "", "", newNOBSError(NOBSErrForbidden, "note path is not a regular vault file")
 	}
+	root, err := filepath.EvalSymlinks(vaultDir())
+	if err != nil {
+		return "", "", newNOBSError(NOBSErrBrokerUnavailable, "vault directory unavailable")
+	}
 	resolved, err := filepath.EvalSymlinks(fullPath)
-	if err != nil || !withinVault(resolved) {
+	if err != nil || !withinDir(root, resolved) {
 		return "", "", newNOBSError(NOBSErrForbidden, "note escapes vault root")
 	}
 	return fullPath, relPath, nil
@@ -499,8 +526,10 @@ func uniqueTrashPath(relPath string) (string, error) {
 	return "", newNOBSError(NOBSErrUnexpected, "unable to allocate unique trash path")
 }
 
-func withinVault(path string) bool {
-	root := filepath.Clean(vaultDir()) + string(filepath.Separator)
-	cleaned := filepath.Clean(path)
-	return cleaned == filepath.Clean(vaultDir()) || strings.HasPrefix(cleaned, root)
+// True when path is dir or inside it. Resolve links in both, or in neither,
+// before calling.
+func withinDir(dir, path string) bool {
+	dir = filepath.Clean(dir)
+	path = filepath.Clean(path)
+	return path == dir || strings.HasPrefix(path, dir+string(filepath.Separator))
 }

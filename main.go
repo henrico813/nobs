@@ -5,13 +5,14 @@ import (
 	"os"
 )
 
-// usage describes the nobs client and service surface.
+// Help text for nobs with no command, help, -h, and --help.
 func usage() string {
 	return `usage:
   nobs service
   nobs health
   nobs sync-status
   nobs sync-now
+  nobs find REF [--json]
   nobs search QUERY
   nobs rg QUERY
   nobs read PATH
@@ -26,7 +27,8 @@ func usage() string {
 `
 }
 
-// runMain keeps the top-level CLI thin so broker and vault logic stay testable.
+// Returns the exit code for one nobs command. Except for service, commands
+// parse arguments here and send the vault work to the broker.
 func runMain(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprint(os.Stdout, usage())
@@ -55,6 +57,16 @@ func runMain(args []string) int {
 		return printJSON(resp)
 	case "sync-now":
 		resp, err := brokerJSONCall[struct{}, syncStatusResponse]("sync-now", struct{}{})
+		if err != nil {
+			return printCLIError(err)
+		}
+		return printJSON(resp)
+	case "find":
+		req, err := parseFindCLI(args[1:])
+		if err != nil {
+			return printCLIError(err)
+		}
+		resp, err := brokerJSONCall[findRequest, findResponse]("find", req)
 		if err != nil {
 			return printCLIError(err)
 		}
