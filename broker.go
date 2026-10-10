@@ -12,7 +12,9 @@ import (
 	"time"
 )
 
-// vaultMu serializes sync and mutations while keeping reads concurrent.
+// Reads and /sync-status share the vault. Edits and /sync-now run one at a
+// time after running reads finish, and new reads wait while one of them is
+// running or queued.
 var vaultMu sync.RWMutex
 
 func brokerWriteTimeout() time.Duration {
@@ -403,10 +405,18 @@ func brokerGETAllowConflict(path string) (map[string]any, error) {
 func brokerCommandTimeout(command string) time.Duration {
 	switch command {
 	case "sync-now":
-		// Real vault syncs can take much longer than note CRUD calls.
+		// Once it holds the vault lock, the broker stops a sync after
+		// syncRequestTimeout plus obWaitDelay. Waiting longer lets the CLI show
+		// the broker's timeout error instead of its own, unless the sync first
+		// waited a long time for the lock.
 		return 3 * time.Minute
 	case "apply-patch":
 		return 30 * time.Second
+	case "search", "rg", "read", "today", "daily":
+		// Reads wait behind a running sync-now, which lasts up to
+		// syncRequestTimeout plus obWaitDelay, and may then scan a large vault.
+		// A queued sync-now or edit ahead of them adds to that wait.
+		return 150 * time.Second
 	default:
 		return 15 * time.Second
 	}

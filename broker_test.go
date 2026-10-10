@@ -211,3 +211,14 @@ func TestBrokerListenAddress(t *testing.T) {
 		})
 	}
 }
+
+// An agent's read during a sync must wait for the sync, not fail first. So
+// every read command must wait longer than the longest sync.
+func TestReadCommandsOutlastSyncNow(t *testing.T) {
+	longestSync := syncRequestTimeout + obWaitDelay
+	for _, command := range []string{"search", "rg", "read", "today", "daily"} {
+		if got := brokerCommandTimeout(command); got <= longestSync {
+			t.Errorf("%s waits %s, want more than sync-now's %s", command, got, longestSync)
+		}
+	}
+}

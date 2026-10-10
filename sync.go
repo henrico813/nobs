@@ -43,10 +43,18 @@ func liveHealth() error {
 }
 
 func syncStatus() (syncStatusResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), syncRequestTimeout)
+	defer cancel()
+	return syncStatusContext(ctx)
+}
+
+// Takes the caller's deadline so syncNow can give both of its ob calls one
+// shared deadline.
+func syncStatusContext(ctx context.Context) (syncStatusResponse, error) {
 	if err := liveHealth(); err != nil {
 		return syncStatusResponse{}, err
 	}
-	output, err := runOb("sync-status", "--path", vaultDir())
+	output, err := runOb(ctx, "sync-status", "--path", vaultDir())
 	if err != nil {
 		message := err.Error()
 		if looksUnconfigured(message) {
@@ -57,9 +65,12 @@ func syncStatus() (syncStatusResponse, error) {
 	return newSyncStatusResponse(true, "ok", output), nil
 }
 
-// syncNow remains explicit and blocking so note mutations stay serialized.
+// Blocks until ob has uploaded and downloaded vault changes. The status check
+// and the sync share one syncRequestTimeout deadline.
 func syncNow() (syncStatusResponse, error) {
-	status, err := syncStatus()
+	ctx, cancel := context.WithTimeout(context.Background(), syncRequestTimeout)
+	defer cancel()
+	status, err := syncStatusContext(ctx)
 	if err != nil {
 		return syncStatusResponse{}, err
 	}
@@ -69,7 +80,7 @@ func syncNow() (syncStatusResponse, error) {
 			"obsidian sync is not configured",
 		)
 	}
-	output, err := runOb("sync", "--path", vaultDir())
+	output, err := runOb(ctx, "sync", "--path", vaultDir())
 	if err != nil {
 		return syncStatusResponse{}, err
 	}
@@ -89,11 +100,19 @@ func looksUnconfigured(message string) bool {
 	return strings.Contains(value, "no sync configuration found for ")
 }
 
-// runOb is the only shell-out path so sync behavior stays easy to audit.
-func runOb(args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
+// A whole sync-status or sync-now request, across all of its ob calls, must
+// finish within this time or ob is stopped.
+const syncRequestTimeout = 2 * time.Minute
+
+// A process that ob starts can keep ob's output open after ob exits or is
+// stopped. After this delay runOb stops waiting for the output and returns an
+// error.
+const obWaitDelay = 5 * time.Second
+
+// Stops ob when ctx ends, so every ob call obeys its caller's deadline.
+func runOb(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "ob", args...)
+	cmd.WaitDelay = obWaitDelay
 	cmd.Dir = vaultDir()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
