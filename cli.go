@@ -44,6 +44,21 @@ func parseSearchCLI(args []string) (searchRequest, error) {
 	return searchRequest{Query: query}, nil
 }
 
+// Takes exactly one reference. Ignores --json, which agent prompts pass,
+// because find always prints JSON.
+func parseFindCLI(args []string) (findRequest, error) {
+	var refs []string
+	for _, arg := range args {
+		if arg != "--json" {
+			refs = append(refs, arg)
+		}
+	}
+	if len(refs) != 1 || strings.TrimSpace(refs[0]) == "" {
+		return findRequest{}, newNOBSError(NOBSErrInvalidArgs, "find requires exactly one reference")
+	}
+	return findRequest{Ref: refs[0]}, nil
+}
+
 func parsePathCLI(command string, args []string) (notePathRequest, error) {
 	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
 		return notePathRequest{}, newNOBSError(NOBSErrInvalidArgs, "%s requires exactly one path", command)
