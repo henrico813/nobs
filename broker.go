@@ -380,9 +380,9 @@ func brokerHealth() (map[string]any, error) {
 }
 
 func brokerGET(path string) (map[string]any, error) {
-	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("NOBS_BROKER_URL")), "/")
-	if baseURL == "" {
-		return nil, newNOBSError(NOBSErrBrokerUnavailable, "NOBS_BROKER_URL is empty")
+	baseURL, err := brokerBaseURL()
+	if err != nil {
+		return nil, err
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(baseURL + path)
@@ -401,9 +401,9 @@ func brokerGET(path string) (map[string]any, error) {
 }
 
 func brokerGETAllowConflict(path string) (map[string]any, error) {
-	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("NOBS_BROKER_URL")), "/")
-	if baseURL == "" {
-		return nil, newNOBSError(NOBSErrBrokerUnavailable, "NOBS_BROKER_URL is empty")
+	baseURL, err := brokerBaseURL()
+	if err != nil {
+		return nil, err
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(baseURL + path)
@@ -444,9 +444,9 @@ func brokerCommandTimeout(command string) time.Duration {
 // brokerJSONCall keeps the CLI and broker transport generic across note operations.
 func brokerJSONCall[Req any, Resp any](command string, req Req) (Resp, error) {
 	var zero Resp
-	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("NOBS_BROKER_URL")), "/")
-	if baseURL == "" {
-		return zero, newNOBSError(NOBSErrBrokerUnavailable, "NOBS_BROKER_URL is empty")
+	baseURL, err := brokerBaseURL()
+	if err != nil {
+		return zero, err
 	}
 	body, err := json.Marshal(req)
 	if err != nil {

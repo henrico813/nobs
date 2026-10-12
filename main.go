@@ -5,10 +5,19 @@ import (
 	"os"
 )
 
+// The --vault value for the current command. runMain sets it on every call, to
+// "" without the flag, so one call's flag never reaches the next.
+var cliVault string
+
 // Help text for nobs with no command, help, -h, and --help.
 func usage() string {
 	return `usage:
   nobs service
+  nobs vault set NAME PATH
+  nobs vault rm NAME
+  nobs vault list
+  nobs vault path [NAME]
+  nobs vault default [NAME]
   nobs health
   nobs sync-status
   nobs sync-now
@@ -24,12 +33,26 @@ func usage() string {
   nobs delete PATH
   nobs today
   nobs daily [DATE]
+
+Commands other than service and vault take --vault NAME first, as in
+nobs --vault work find REF. They use the broker for that vault, else
+NOBS_BROKER_URL, else the default vault.
 `
 }
 
 // Returns the exit code for one nobs command. Except for service, commands
 // parse arguments here and send the vault work to the broker.
 func runMain(args []string) int {
+	cliVault = ""
+	if len(args) > 0 && args[0] == "--vault" {
+		if len(args) < 2 || args[1] == "" {
+			return printCLIError(newNOBSError(NOBSErrInvalidArgs, "--vault requires a vault name"))
+		}
+		cliVault, args = args[1], args[2:]
+	}
+	if cliVault != "" && len(args) > 0 && (args[0] == "service" || args[0] == "vault") {
+		return printCLIError(newNOBSError(NOBSErrInvalidArgs, "--vault does not apply to nobs %s", args[0]))
+	}
 	if len(args) == 0 {
 		fmt.Fprint(os.Stdout, usage())
 		return 0
@@ -43,6 +66,8 @@ func runMain(args []string) int {
 			return printCLIError(err)
 		}
 		return 0
+	case "vault":
+		return runVault(args[1:])
 	case "health":
 		resp, err := brokerHealth()
 		if err != nil {
