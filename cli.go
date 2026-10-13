@@ -74,7 +74,7 @@ func parseWriteCLI(command string, args []string, stdin io.Reader) (noteWriteReq
 	}
 	body, err := io.ReadAll(stdin)
 	if err != nil {
-		return noteWriteRequest{}, newNOBSError(NOBSErrUnexpected, err.Error())
+		return noteWriteRequest{}, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	if strings.TrimSpace(string(body)) == "" {
 		return noteWriteRequest{}, newNOBSError(NOBSErrInvalidArgs, "%s body is required on stdin", command)
@@ -88,7 +88,7 @@ func parsePatchCLI(args []string, stdin io.Reader) (patchRequest, error) {
 	}
 	body, err := io.ReadAll(stdin)
 	if err != nil {
-		return patchRequest{}, newNOBSError(NOBSErrUnexpected, err.Error())
+		return patchRequest{}, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	if strings.TrimSpace(string(body)) == "" {
 		return patchRequest{}, newNOBSError(NOBSErrInvalidArgs, "apply-patch diff is required on stdin")
@@ -126,7 +126,7 @@ func printJSON(value any) int {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(value); err != nil {
-		return printCLIError(newNOBSError(NOBSErrUnexpected, err.Error()))
+		return printCLIError(newNOBSError(NOBSErrUnexpected, "%s", err.Error()))
 	}
 	return 0
 }

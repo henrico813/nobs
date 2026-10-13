@@ -113,7 +113,7 @@ func saveVaultSettings(settings vaultSettings) error {
 	}
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
-		return newNOBSError(NOBSErrUnexpected, err.Error())
+		return newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return newNOBSError(NOBSErrUnexpected, "cannot write %s: %v", path, err)

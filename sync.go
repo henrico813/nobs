@@ -131,7 +131,7 @@ func runOb(ctx context.Context, args ...string) (string, error) {
 		if message == "" {
 			message = err.Error()
 		}
-		return "", newNOBSError(NOBSErrSyncUnavailable, message)
+		return "", newNOBSError(NOBSErrSyncUnavailable, "%s", message)
 	}
 	if stdout.Len() > 0 {
 		return stdout.String(), nil

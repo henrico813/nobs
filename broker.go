@@ -400,7 +400,7 @@ func brokerSend(send func(baseURL string) (*http.Response, error)) (*http.Respon
 		resp, err = send(baseURL)
 	}
 	if err != nil {
-		return nil, newNOBSError(NOBSErrBrokerUnavailable, err.Error())
+		return nil, newNOBSError(NOBSErrBrokerUnavailable, "%s", err.Error())
 	}
 	return resp, nil
 }
@@ -413,11 +413,11 @@ func brokerGET(path string) (map[string]any, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, newNOBSError(NOBSErrBrokerUnavailable, resp.Status)
+		return nil, newNOBSError(NOBSErrBrokerUnavailable, "%s", resp.Status)
 	}
 	var out map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, newNOBSError(NOBSErrUnexpected, err.Error())
+		return nil, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	return out, nil
 }
@@ -430,11 +430,11 @@ func brokerGETAllowConflict(path string) (map[string]any, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusConflict {
-		return nil, newNOBSError(NOBSErrBrokerUnavailable, resp.Status)
+		return nil, newNOBSError(NOBSErrBrokerUnavailable, "%s", resp.Status)
 	}
 	var out map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, newNOBSError(NOBSErrUnexpected, err.Error())
+		return nil, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	return out, nil
 }
@@ -464,7 +464,7 @@ func brokerJSONCall[Req any, Resp any](command string, req Req) (Resp, error) {
 	var zero Resp
 	body, err := json.Marshal(req)
 	if err != nil {
-		return zero, newNOBSError(NOBSErrUnexpected, err.Error())
+		return zero, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	client := &http.Client{Timeout: brokerCommandTimeout(command)}
 	resp, err := brokerSend(func(baseURL string) (*http.Response, error) {
@@ -479,11 +479,11 @@ func brokerJSONCall[Req any, Resp any](command string, req Req) (Resp, error) {
 		if err := json.NewDecoder(resp.Body).Decode(&payload); err == nil {
 			return zero, &payload
 		}
-		return zero, newNOBSError(NOBSErrBrokerUnavailable, resp.Status)
+		return zero, newNOBSError(NOBSErrBrokerUnavailable, "%s", resp.Status)
 	}
 	var out Resp
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return zero, newNOBSError(NOBSErrUnexpected, err.Error())
+		return zero, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	return out, nil
 }

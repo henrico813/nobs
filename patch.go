@@ -50,7 +50,7 @@ func handleRG(req searchRequest) (searchResponse, error) {
 		if message == "" {
 			message = err.Error()
 		}
-		return searchResponse{}, newNOBSError(NOBSErrUnexpected, message)
+		return searchResponse{}, newNOBSError(NOBSErrUnexpected, "%s", message)
 	}
 	return parseRGOutput(stdout)
 }
@@ -78,7 +78,7 @@ func handleApplyPatch(req patchRequest) (patchResponse, error) {
 		if message == "" {
 			message = err.Error()
 		}
-		return patchResponse{}, newNOBSError(NOBSErrInvalidArgs, message)
+		return patchResponse{}, newNOBSError(NOBSErrInvalidArgs, "%s", message)
 	}
 	stdout, stderr, err = runVaultCommand(30*time.Second, req.Patch, "git", "apply", "--recount", "-")
 	if err != nil {
@@ -89,7 +89,7 @@ func handleApplyPatch(req patchRequest) (patchResponse, error) {
 		if message == "" {
 			message = err.Error()
 		}
-		return patchResponse{}, newNOBSError(NOBSErrUnexpected, message)
+		return patchResponse{}, newNOBSError(NOBSErrUnexpected, "%s", message)
 	}
 	return patchResponse{Path: info.Path, Operation: "apply-patch", Hunks: info.Hunks}, nil
 }
@@ -118,7 +118,7 @@ func parseRGOutput(output string) (searchResponse, error) {
 		resp.Matches = append(resp.Matches, searchMatch{Path: path, Line: lineNumber, Text: parts[1]})
 	}
 	if err := scanner.Err(); err != nil {
-		return searchResponse{}, newNOBSError(NOBSErrUnexpected, err.Error())
+		return searchResponse{}, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	return resp, nil
 }

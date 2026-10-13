@@ -58,7 +58,7 @@ func handleFind(req findRequest) (findResponse, error) {
 		return nil
 	})
 	if err != nil {
-		return findResponse{}, newNOBSError(NOBSErrUnexpected, err.Error())
+		return findResponse{}, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	for _, matches := range [][]string{exactMatches, prefixMatches, titleMatches} {
 		switch len(matches) {
