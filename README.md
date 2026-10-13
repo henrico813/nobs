@@ -30,7 +30,35 @@ docker build -t nobs:v0.2.0 .
 - Set `NOBS_VAULT_IS_MOUNTED=true` when the vault is on a mount that might be missing. The broker then refuses health, vault, and sync requests, including `sync-now`, until `.obsidian` exists, so only use it for a vault that is already enrolled and synced. It is off when unset.
 - `OBSIDIAN_VAULT_DIR` sets the vault folder. It defaults to `/vault`. Use an absolute path; with a relative one, `nobs read` cannot take the paths `nobs find` prints.
 
-`NOBS_BROKER_URL` sets the broker address used by CLI commands, such as `http://127.0.0.1:8080`; without it, CLI commands fail.
+## Choosing a broker
+
+Commands other than `service` and `vault` send their work to one broker. The first of these that is set wins:
+
+1. `--vault NAME` before the command, as in `nobs --vault work find REF`, uses that vault's port on `127.0.0.1`. An unknown name is an error.
+2. `NOBS_BROKER_URL`, such as `http://127.0.0.1:8080`. Without `--vault`, the settings file is not read, so a container with only this variable never depends on it.
+3. The default vault in the settings file.
+
+With none of them, commands fail and say to run `nobs vault set`.
+
+## Vaults on a computer
+
+`nobs vault` keeps the vaults on this computer in `$XDG_CONFIG_HOME/nobs/config.json`, or `~/.config/nobs/config.json` when `XDG_CONFIG_HOME` is unset or not an absolute path. Change it only with these commands:
+
+```sh
+nobs vault set NAME PATH     # add a vault or change its folder
+nobs vault rm NAME           # remove a vault from the list
+nobs vault list              # JSON list of name, path and port
+nobs vault path [NAME]       # the vault's folder; the default vault without NAME
+nobs vault default [NAME]    # show or change the default vault
+```
+
+These commands only change the settings file; they do not start or stop brokers.
+
+- Names start with a lowercase letter and use only lowercase letters, digits and hyphens.
+- `PATH` must be absolute and contain `.obsidian/`. It is stored as given, without resolving links.
+- `set` gives a new vault the lowest port from 8781 up that no other vault uses. Changing a vault's folder keeps its port, and a port freed by `rm` is used again.
+- When there is no default, the vault being set becomes the default. Removing the default vault leaves no default.
+- Commands refuse a settings file with unknown keys, bad names, relative paths, shared ports or a default that is not listed.
 
 ## Finding notes
 
