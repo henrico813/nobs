@@ -9,7 +9,7 @@ Agents can pass the full path that `nobs find` prints straight to `nobs read`. O
 Each release from `v0.3.1` on has Linux binaries for amd64 and arm64 and a `checksums.txt`. Download the binary for your computer, check it, and put it on your `PATH`:
 
 ```sh
-VERSION=v0.3.2
+VERSION=v0.3.3
 ARCH=amd64   # or arm64
 curl -fLO "https://github.com/henrico813/nobs/releases/download/$VERSION/nobs_linux_$ARCH"
 curl -fLO "https://github.com/henrico813/nobs/releases/download/$VERSION/checksums.txt"
@@ -20,7 +20,7 @@ install -D -m 755 "nobs_linux_$ARCH" ~/.local/bin/nobs
 With Go installed, `go install` builds the same release, and works for earlier tags too:
 
 ```sh
-go install github.com/henrico813/nobs@v0.3.2
+go install github.com/henrico813/nobs@v0.3.3
 ```
 
 From `v0.3.2` on, `go install` needs Go 1.27.2, or Go 1.21 or later with the default `GOTOOLCHAIN=auto`, which downloads it.
@@ -45,7 +45,7 @@ The `go` line in `go.mod` and the `golang` image in the `Dockerfile` name the sa
 
 ## Choosing a broker
 
-Commands other than `service` and `vault` send their work to one broker. The first of these that is set wins:
+Commands other than `service`, `vault` and `tls` send their work to one broker. The first of these that is set wins:
 
 1. `--vault NAME` before the command, as in `nobs --vault work find REF`, uses that vault's port on `127.0.0.1`. An unknown name is an error.
 2. `NOBS_BROKER_URL`, such as `http://127.0.0.1:8080`. Without `--vault`, the settings file is not read, so a container with only this variable never depends on it.
@@ -55,7 +55,7 @@ With none of them, commands fail and say to run `nobs vault set`.
 
 ## Vaults on a computer
 
-`nobs vault` keeps the vaults on this computer in `$XDG_CONFIG_HOME/nobs/config.json`, or `~/.config/nobs/config.json` when `XDG_CONFIG_HOME` is unset or not an absolute path. Change it only with these commands:
+`nobs vault` keeps the vaults on this computer in `$XDG_CONFIG_HOME/nobs/config.json`, or `~/.config/nobs/config.json` when `XDG_CONFIG_HOME` is unset or not an absolute path. Change it only with these commands, and `nobs tls insecure` (see "Networks that re-sign TLS certificates"):
 
 ```sh
 nobs vault set NAME PATH     # add a vault or change its folder, and start its broker
@@ -94,6 +94,23 @@ nobs vault set NAME PATH
 Every `nobs` command that may start a broker, including later ones, needs the same `NOBS_VERSION`. Run `nobs vault set` again after changing versions to replace the broker.
 
 `/livez`, `/configz`, `find`, `search`, `rg` and `sync-status` create no files in the vault. Only `nobs health` (through `/readyz`) and `apply-patch` briefly create `.nobs-write-probe` to check that the vault is writable.
+
+## Networks that re-sign TLS certificates
+
+Some networks send HTTPS through a proxy that re-signs every certificate with its own. `ob` runs on Node, which rejects those certificates, so `sync-status` and `sync-now` fail or time out. If the proxy cannot be avoided, turn off certificate checks in the brokers on this computer:
+
+```sh
+nobs tls insecure on    # brokers accept any TLS certificate
+nobs tls insecure       # print on or off
+nobs tls insecure off   # brokers check certificates again
+```
+
+This is dangerous. With it on, anyone on the network path can pretend to be Obsidian's servers, and read your Obsidian login and your notes as they sync. Use it only on a computer whose network requires it, and turn it off when that computer no longer needs it.
+
+- It is off unless turned on. When on, the settings file has `"insecure_tls": true`, and each broker container gets `NODE_TLS_REJECT_UNAUTHORIZED=0`. Nothing outside the containers changes.
+- `on` and `off` save the setting, then run `docker compose up -d` for every vault, which replaces each broker so the change takes effect at once. A broker that cannot start, for example because its drive is not mounted, is named in an error and the command exits nonzero. If that broker is still running, it keeps its old setting, so run `nobs tls insecure on` (or `off`) again once the drive is mounted.
+- While it is on, `vault set`, `tls insecure on`, `health` and a command that starts a stopped broker print `warning: insecure TLS is on; the broker does not verify TLS certificates` on stderr.
+- `nobs` `v0.3.0` to `v0.3.2` refuse a settings file with this key. Turn it off before going back to one.
 
 ## Finding notes
 

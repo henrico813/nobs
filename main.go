@@ -18,6 +18,7 @@ func usage() string {
   nobs vault list
   nobs vault path [NAME]
   nobs vault default [NAME]
+  nobs tls insecure [on|off]
   nobs health
   nobs sync-status
   nobs sync-now
@@ -34,9 +35,9 @@ func usage() string {
   nobs today
   nobs daily [DATE]
 
-Commands other than service and vault take --vault NAME first, as in
-nobs --vault work find REF. They use the broker for that vault, else
-NOBS_BROKER_URL, else the default vault.
+Commands other than service, vault and tls take --vault NAME first,
+as in nobs --vault work find REF. They use the broker for that vault,
+else NOBS_BROKER_URL, else the default vault.
 `
 }
 
@@ -50,7 +51,7 @@ func runMain(args []string) int {
 		}
 		cliVault, args = args[1], args[2:]
 	}
-	if cliVault != "" && len(args) > 0 && (args[0] == "service" || args[0] == "vault") {
+	if cliVault != "" && len(args) > 0 && (args[0] == "service" || args[0] == "vault" || args[0] == "tls") {
 		return printCLIError(newNOBSError(NOBSErrInvalidArgs, "--vault does not apply to nobs %s", args[0]))
 	}
 	if len(args) == 0 {
@@ -68,7 +69,14 @@ func runMain(args []string) int {
 		return 0
 	case "vault":
 		return runVault(args[1:])
+	case "tls":
+		return runTLS(args[1:])
 	case "health":
+		// Only for a vault on this computer: the setting says nothing about a
+		// broker that NOBS_BROKER_URL names. brokerHealth reports any error.
+		if _, vault, settings, err := brokerBaseURL(); err == nil && vault != "" && settings.InsecureTLS {
+			warnInsecureTLS()
+		}
 		resp, err := brokerHealth()
 		if err != nil {
 			return printCLIError(err)

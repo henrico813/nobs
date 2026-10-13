@@ -34,13 +34,14 @@ func useTempSettings(t *testing.T) string {
 }
 
 // Puts a fake docker first on PATH. Each call appends one line to the returned
-// log: its arguments, then the vault folder, port and user it was given. Then
-// it runs the shell lines in then.
+// log: its arguments, then the vault folder, port and user it was given. It
+// saves the Compose file of the latest call as compose.yml next to the log.
+// Then it runs the shell lines in then.
 func useFakeDocker(t *testing.T, then string) string {
 	t.Helper()
 	dir := t.TempDir()
 	log := filepath.Join(dir, "calls.log")
-	script := fmt.Sprintf("#!/bin/sh\ncat >/dev/null\necho \"$* vault=$NOBS_VAULT_PATH port=$NOBS_PORT user=$NOBS_UID:$NOBS_GID\" >>%q\n%s\n", log, then)
+	script := fmt.Sprintf("#!/bin/sh\ncat >%q\necho \"$* vault=$NOBS_VAULT_PATH port=$NOBS_PORT user=$NOBS_UID:$NOBS_GID\" >>%q\n%s\n", filepath.Join(dir, "compose.yml"), log, then)
 	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -502,5 +503,59 @@ func TestVaultListShowsWhichBrokersRun(t *testing.T) {
 	}
 	if !reflect.DeepEqual(items, want) {
 		t.Fatalf("vault list = %#v, want %#v", items, want)
+	}
+}
+
+// On a network whose proxy re-signs TLS certificates, ob in the broker
+// rejects them and every sync fails. With the setting on, each way nobs
+// starts a broker must turn off Node's certificate checks: on itself, vault
+// set, and the automatic start after a reboot. Any of them that dropped the
+// setting would replace the broker without it. Off must turn them back on,
+// and brokers must never get the variable unless the setting is on.
+func TestBrokerEnvironmentFollowsInsecureTLSSetting(t *testing.T) {
+	useTempSettings(t)
+	compose := filepath.Join(filepath.Dir(useFakeDocker(t, "exit 0")), "compose.yml")
+	// Runs one nobs command. Returns its exit code and output, and whether
+	// the Compose file it gave docker has the variable.
+	run := func(args ...string) (int, string, bool) {
+		os.Remove(compose)
+		code, stdout := captureStdout(t, func() int { return runMain(args) })
+		data, err := os.ReadFile(compose)
+		if err != nil {
+			t.Fatalf("nobs %s did not run docker compose: %v", strings.Join(args, " "), err)
+		}
+		return code, strings.TrimSpace(stdout), strings.Contains(string(data), `NODE_TLS_REJECT_UNAUTHORIZED: "0"`)
+	}
+
+	vault := makeVault(t)
+	setCode, _, atSet := run("vault", "set", "main", vault)
+	onCode, onOut, atOn := run("tls", "insecure", "on")
+	resetCode, _, atReset := run("vault", "set", "main", vault)
+	// The fake docker starts nothing, so find is refused and starts the
+	// broker again, as after a reboot.
+	_, _, atRestart := run("find", "Plan")
+	offCode, offOut, atOff := run("tls", "insecure", "off")
+
+	if setCode != 0 || onCode != 0 || onOut != "on" || resetCode != 0 || offCode != 0 || offOut != "off" {
+		t.Fatalf("set exit %d; on exit %d %q; set again exit %d; off exit %d %q", setCode, onCode, onOut, resetCode, offCode, offOut)
+	}
+	if atSet || !atOn || !atReset || !atRestart || atOff {
+		t.Fatalf("variable at set %v, on %v, set again %v, restart %v, off %v; want false, true, true, true, false", atSet, atOn, atReset, atRestart, atOff)
+	}
+}
+
+// nobs v0.3.0 to v0.3.2 refuse settings files with keys they do not know.
+// Turning the setting off must leave no new key in a file one of them wrote,
+// so an older nobs on the same computer keeps working.
+func TestTLSOffKeepsOldSettingsFormat(t *testing.T) {
+	settings := useTempSettings(t)
+	writeSettings(t, settings, fmt.Sprintf(`{"default":"main","vaults":{"main":{"path":%q,"port":%d}}}`, makeVault(t), closedPort(t)))
+
+	captureStdout(t, func() int { return runMain([]string{"tls", "insecure", "on"}) })
+	captureStdout(t, func() int { return runMain([]string{"tls", "insecure", "off"}) })
+	data, err := os.ReadFile(settings)
+
+	if err != nil || strings.Contains(string(data), "insecure_tls") {
+		t.Fatalf("settings file after off = %q, %v; want no insecure_tls key", data, err)
 	}
 }

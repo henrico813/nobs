@@ -52,6 +52,22 @@ const composeFile = `services:
     restart: unless-stopped
 `
 
+// Returns composeFile, plus NODE_TLS_REJECT_UNAUTHORIZED=0 after HOME when
+// insecureTLS is true. ob runs on Node, which then accepts any TLS
+// certificate, such as one a network proxy re-signs. When insecureTLS is
+// false the file is composeFile unchanged, so brokers stay as before.
+func brokerComposeFile(insecureTLS bool) string {
+	if !insecureTLS {
+		return composeFile
+	}
+	return strings.Replace(composeFile, "      HOME: /tmp\n", "      HOME: /tmp\n      NODE_TLS_REJECT_UNAUTHORIZED: \"0\"\n", 1)
+}
+
+// Goes to stderr, so commands that print JSON on stdout stay readable.
+func warnInsecureTLS() {
+	fmt.Fprintln(os.Stderr, "warning: insecure TLS is on; the broker does not verify TLS certificates")
+}
+
 // How long startBroker waits for a started broker to answer. Tests shorten it.
 var brokerStartWait = 10 * time.Second
 
@@ -81,20 +97,22 @@ func brokerVersion() (string, error) {
 }
 
 // Runs docker compose for the named vault's broker (project nobs-NAME) with
-// composeFile. Docker's output goes to stderr, so a person sees an image build
-// as it runs and Docker's reason when it fails, such as a port in use or a
-// failed build.
-func runCompose(name string, vault vaultEntry, args ...string) error {
+// brokerComposeFile. It takes the whole settings, not one vault, so callers
+// pass this computer's TLS setting along with the vault. Docker's output goes
+// to stderr, so a person sees an image build as it runs and Docker's reason
+// when it fails, such as a port in use or a failed build.
+func runCompose(name string, settings vaultSettings, args ...string) error {
+	vault := settings.Vaults[name]
 	tag, err := brokerVersion()
 	if err != nil {
 		return err
 	}
-	settings, err := settingsPath()
+	configPath, err := settingsPath()
 	if err != nil {
 		return err
 	}
 	cmd := exec.Command("docker", append([]string{"compose", "-p", "nobs-" + name, "-f", "-"}, args...)...)
-	cmd.Stdin = strings.NewReader(composeFile)
+	cmd.Stdin = strings.NewReader(brokerComposeFile(settings.InsecureTLS))
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	// nobs passes the user and group IDs because the shell does not export UID.
@@ -105,7 +123,7 @@ func runCompose(name string, vault vaultEntry, args ...string) error {
 		"NOBS_GID="+strconv.Itoa(os.Getgid()),
 		"NOBS_VAULT_PATH="+vault.Path,
 		"NOBS_PORT="+strconv.Itoa(vault.Port),
-		"NOBS_OB_CONFIG="+filepath.Join(filepath.Dir(filepath.Dir(settings)), "obsidian-headless"),
+		"NOBS_OB_CONFIG="+filepath.Join(filepath.Dir(filepath.Dir(configPath)), "obsidian-headless"),
 	)
 	err = cmd.Run()
 	if errors.Is(err, exec.ErrNotFound) {
@@ -121,12 +139,16 @@ func runCompose(name string, vault vaultEntry, args ...string) error {
 // brokerStartWait for it to answer. Up -d leaves a running broker with the
 // same settings alone and replaces one whose settings changed. A broker that
 // starts but does not answer in time is not an error here; the caller's next
-// request reports why.
-func startBroker(name string, vault vaultEntry) error {
+// request reports why. Warns first while insecure TLS is on.
+func startBroker(name string, settings vaultSettings) error {
+	vault := settings.Vaults[name]
 	if _, err := checkVaultFolder(vault.Path); err != nil {
 		return err
 	}
-	if err := runCompose(name, vault, "up", "-d"); err != nil {
+	if settings.InsecureTLS {
+		warnInsecureTLS()
+	}
+	if err := runCompose(name, settings, "up", "-d"); err != nil {
 		return err
 	}
 	for deadline := time.Now().Add(brokerStartWait); !brokerIsLive(vault.Port) && time.Now().Before(deadline); {
