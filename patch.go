@@ -23,7 +23,7 @@ type patchInfo struct {
 }
 
 func handleRG(req searchRequest) (searchResponse, error) {
-	if err := readyHealth(); err != nil {
+	if err := checkVaultMounted(); err != nil {
 		return searchResponse{}, err
 	}
 	query := strings.TrimSpace(req.Query)

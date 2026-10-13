@@ -127,7 +127,7 @@ func walkVaultNotes(visit func(fullPath, relPath string) error) error {
 }
 
 func handleSearch(req searchRequest) (searchResponse, error) {
-	if err := readyHealth(); err != nil {
+	if err := checkVaultMounted(); err != nil {
 		return searchResponse{}, err
 	}
 	query := strings.ToLower(strings.TrimSpace(req.Query))

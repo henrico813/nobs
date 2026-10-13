@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -32,11 +33,13 @@ type vaultEntry struct {
 	Port int    `json:"port"`
 }
 
-// One vault as nobs vault list prints it.
+// One vault as nobs vault list prints it. Running is true when its broker
+// answers on its port.
 type vaultListItem struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
-	Port int    `json:"port"`
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Port    int    `json:"port"`
+	Running bool   `json:"running"`
 }
 
 // $XDG_CONFIG_HOME/nobs/config.json when XDG_CONFIG_HOME is absolute, else
@@ -154,14 +157,20 @@ func checkVaultFolder(raw string) (string, error) {
 }
 
 // Returns the lowest port from firstVaultPort up that no vault in settings
-// uses. Another program may hold it; starting the broker reports that.
+// uses and nothing on 127.0.0.1 is listening on. If a program takes it
+// before the broker starts, docker compose reports the port in use.
 func pickVaultPort(settings vaultSettings) (int, error) {
 	used := map[int]bool{}
 	for _, vault := range settings.Vaults {
 		used[vault.Port] = true
 	}
 	for port := firstVaultPort; port <= 65535; port++ {
-		if !used[port] {
+		if used[port] {
+			continue
+		}
+		listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err == nil {
+			listener.Close()
 			return port, nil
 		}
 	}
@@ -195,35 +204,39 @@ func unknownVaultError(name string) error {
 }
 
 // Which broker a CLI command talks to. The first match wins: the --vault flag
-// (cliVault), then NOBS_BROKER_URL, then the default vault. With
-// NOBS_BROKER_URL set and no flag, the settings file is not read, so
-// containers that have no settings file are not affected by it.
-func brokerBaseURL() (string, error) {
+// (cliVault), then NOBS_BROKER_URL, then the default vault. Returns the
+// broker's address and, for a vault on this computer, its name and settings;
+// the name is empty for NOBS_BROKER_URL. With NOBS_BROKER_URL set and no flag,
+// the settings file is not read, so containers that have no settings file are
+// not affected by it.
+func brokerBaseURL() (string, string, vaultEntry, error) {
 	vault := cliVault
 	if vault == "" {
 		if url := strings.TrimRight(strings.TrimSpace(os.Getenv("NOBS_BROKER_URL")), "/"); url != "" {
-			return url, nil
+			return url, "", vaultEntry{}, nil
 		}
 	}
 	settings, err := loadVaultSettings()
 	if err != nil {
-		return "", err
+		return "", "", vaultEntry{}, err
 	}
 	if vault == "" {
 		vault = settings.Default
 		if vault == "" {
-			return "", newNOBSError(NOBSErrBrokerUnavailable, "no broker chosen: pass --vault NAME, set NOBS_BROKER_URL, or add a vault with nobs vault set NAME PATH")
+			return "", "", vaultEntry{}, newNOBSError(NOBSErrBrokerUnavailable, "no broker chosen: pass --vault NAME, set NOBS_BROKER_URL, or add a vault with nobs vault set NAME PATH")
 		}
 	}
 	entry, ok := settings.Vaults[vault]
 	if !ok {
-		return "", unknownVaultError(vault)
+		return "", "", vaultEntry{}, unknownVaultError(vault)
 	}
-	return fmt.Sprintf("http://127.0.0.1:%d", entry.Port), nil
+	return fmt.Sprintf("http://127.0.0.1:%d", entry.Port), vault, entry, nil
 }
 
-// Runs nobs vault SUBCOMMAND and returns the exit code. These commands only
-// change the settings file; they do not start or stop brokers.
+// Runs nobs vault SUBCOMMAND and returns the exit code. set starts the vault's
+// broker and rm stops and removes it. Both change the settings file only after
+// Docker succeeds, so the file never lists a vault whose broker could not be
+// created, or drops one whose broker is running.
 func runVault(args []string) int {
 	if len(args) == 0 {
 		return printCLIError(newNOBSError(NOBSErrInvalidArgs, "vault needs a subcommand: set, rm, list, path or default"))
@@ -244,17 +257,24 @@ func runVault(args []string) int {
 		if err := setVault(&settings, args[0], folder); err != nil {
 			return printCLIError(err)
 		}
+		vault := settings.Vaults[args[0]]
+		if err := startBroker(args[0], vault); err != nil {
+			return printCLIError(err)
+		}
 		if err := saveVaultSettings(settings); err != nil {
 			return printCLIError(err)
 		}
-		vault := settings.Vaults[args[0]]
-		return printJSON(vaultListItem{Name: args[0], Path: vault.Path, Port: vault.Port})
+		return printJSON(vaultListItem{Name: args[0], Path: vault.Path, Port: vault.Port, Running: brokerIsLive(vault.Port)})
 	case "rm":
 		if len(args) != 1 {
 			return printCLIError(newNOBSError(NOBSErrInvalidArgs, "vault rm requires NAME"))
 		}
-		if _, ok := settings.Vaults[args[0]]; !ok {
+		vault, ok := settings.Vaults[args[0]]
+		if !ok {
 			return printCLIError(unknownVaultError(args[0]))
+		}
+		if err := runCompose(args[0], vault, "down"); err != nil {
+			return printCLIError(err)
 		}
 		delete(settings.Vaults, args[0])
 		if settings.Default == args[0] {
@@ -270,7 +290,7 @@ func runVault(args []string) int {
 		}
 		items := make([]vaultListItem, 0, len(settings.Vaults))
 		for name, vault := range settings.Vaults {
-			items = append(items, vaultListItem{Name: name, Path: vault.Path, Port: vault.Port})
+			items = append(items, vaultListItem{Name: name, Path: vault.Path, Port: vault.Port, Running: brokerIsLive(vault.Port)})
 		}
 		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 		return printJSON(items)

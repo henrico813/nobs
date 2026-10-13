@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -379,15 +380,36 @@ func brokerHealth() (map[string]any, error) {
 	return map[string]any{"live": live, "configured": configured, "ready": ready}, nil
 }
 
-func brokerGET(path string) (map[string]any, error) {
-	baseURL, err := brokerBaseURL()
+// Sends one request to the broker brokerBaseURL picks. When that broker is a
+// vault on this computer and refuses the connection, as after a restart where
+// its container could not start, it is started once and the request is sent
+// once more. A refused connection never reached the broker, so sending again
+// cannot repeat an edit. Brokers from NOBS_BROKER_URL are never started: the
+// computer using one may not run Docker.
+func brokerSend(send func(baseURL string) (*http.Response, error)) (*http.Response, error) {
+	baseURL, vault, entry, err := brokerBaseURL()
 	if err != nil {
 		return nil, err
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(baseURL + path)
+	resp, err := send(baseURL)
+	var opErr *net.OpError
+	if err != nil && vault != "" && errors.As(err, &opErr) && opErr.Op == "dial" {
+		if err := startBroker(vault, entry); err != nil {
+			return nil, err
+		}
+		resp, err = send(baseURL)
+	}
 	if err != nil {
 		return nil, newNOBSError(NOBSErrBrokerUnavailable, err.Error())
+	}
+	return resp, nil
+}
+
+func brokerGET(path string) (map[string]any, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := brokerSend(func(baseURL string) (*http.Response, error) { return client.Get(baseURL + path) })
+	if err != nil {
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -401,14 +423,10 @@ func brokerGET(path string) (map[string]any, error) {
 }
 
 func brokerGETAllowConflict(path string) (map[string]any, error) {
-	baseURL, err := brokerBaseURL()
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := brokerSend(func(baseURL string) (*http.Response, error) { return client.Get(baseURL + path) })
 	if err != nil {
 		return nil, err
-	}
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(baseURL + path)
-	if err != nil {
-		return nil, newNOBSError(NOBSErrBrokerUnavailable, err.Error())
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusConflict {
@@ -444,18 +462,16 @@ func brokerCommandTimeout(command string) time.Duration {
 // brokerJSONCall keeps the CLI and broker transport generic across note operations.
 func brokerJSONCall[Req any, Resp any](command string, req Req) (Resp, error) {
 	var zero Resp
-	baseURL, err := brokerBaseURL()
-	if err != nil {
-		return zero, err
-	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return zero, newNOBSError(NOBSErrUnexpected, err.Error())
 	}
 	client := &http.Client{Timeout: brokerCommandTimeout(command)}
-	resp, err := client.Post(baseURL+"/"+command, "application/json", bytes.NewReader(body))
+	resp, err := brokerSend(func(baseURL string) (*http.Response, error) {
+		return client.Post(baseURL+"/"+command, "application/json", bytes.NewReader(body))
+	})
 	if err != nil {
-		return zero, newNOBSError(NOBSErrBrokerUnavailable, err.Error())
+		return zero, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
