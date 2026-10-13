@@ -387,14 +387,14 @@ func brokerHealth() (map[string]any, error) {
 // cannot repeat an edit. Brokers from NOBS_BROKER_URL are never started: the
 // computer using one may not run Docker.
 func brokerSend(send func(baseURL string) (*http.Response, error)) (*http.Response, error) {
-	baseURL, vault, entry, err := brokerBaseURL()
+	baseURL, vault, settings, err := brokerBaseURL()
 	if err != nil {
 		return nil, err
 	}
 	resp, err := send(baseURL)
 	var opErr *net.OpError
 	if err != nil && vault != "" && errors.As(err, &opErr) && opErr.Op == "dial" {
-		if err := startBroker(vault, entry); err != nil {
+		if err := startBroker(vault, settings); err != nil {
 			return nil, err
 		}
 		resp, err = send(baseURL)

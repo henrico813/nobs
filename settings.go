@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -21,11 +23,15 @@ const firstVaultPort = 8781
 // Docker accepts.
 var vaultNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
-// The vaults on this computer, stored in config.json. Only the vault commands
-// write this file; a hand edit can disagree with the brokers they start.
+// The vaults on this computer, stored in config.json. Only the vault and tls
+// commands write this file; a hand edit can disagree with the brokers they
+// start. InsecureTLS turns off certificate checks in every broker here; it is
+// left out of the file when false, because nobs v0.3.0 to v0.3.2 refuse
+// keys they do not know.
 type vaultSettings struct {
-	Default string                `json:"default,omitempty"`
-	Vaults  map[string]vaultEntry `json:"vaults"`
+	Default     string                `json:"default,omitempty"`
+	Vaults      map[string]vaultEntry `json:"vaults"`
+	InsecureTLS bool                  `json:"insecure_tls,omitempty"`
 }
 
 type vaultEntry struct {
@@ -205,32 +211,32 @@ func unknownVaultError(name string) error {
 
 // Which broker a CLI command talks to. The first match wins: the --vault flag
 // (cliVault), then NOBS_BROKER_URL, then the default vault. Returns the
-// broker's address and, for a vault on this computer, its name and settings;
-// the name is empty for NOBS_BROKER_URL. With NOBS_BROKER_URL set and no flag,
-// the settings file is not read, so containers that have no settings file are
-// not affected by it.
-func brokerBaseURL() (string, string, vaultEntry, error) {
+// broker's address and, for a vault on this computer, its name and this
+// computer's settings; the name is empty for NOBS_BROKER_URL. With
+// NOBS_BROKER_URL set and no flag, the settings file is not read, so
+// containers that have no settings file are not affected by it.
+func brokerBaseURL() (string, string, vaultSettings, error) {
 	vault := cliVault
 	if vault == "" {
 		if url := strings.TrimRight(strings.TrimSpace(os.Getenv("NOBS_BROKER_URL")), "/"); url != "" {
-			return url, "", vaultEntry{}, nil
+			return url, "", vaultSettings{}, nil
 		}
 	}
 	settings, err := loadVaultSettings()
 	if err != nil {
-		return "", "", vaultEntry{}, err
+		return "", "", vaultSettings{}, err
 	}
 	if vault == "" {
 		vault = settings.Default
 		if vault == "" {
-			return "", "", vaultEntry{}, newNOBSError(NOBSErrBrokerUnavailable, "no broker chosen: pass --vault NAME, set NOBS_BROKER_URL, or add a vault with nobs vault set NAME PATH")
+			return "", "", vaultSettings{}, newNOBSError(NOBSErrBrokerUnavailable, "no broker chosen: pass --vault NAME, set NOBS_BROKER_URL, or add a vault with nobs vault set NAME PATH")
 		}
 	}
 	entry, ok := settings.Vaults[vault]
 	if !ok {
-		return "", "", vaultEntry{}, unknownVaultError(vault)
+		return "", "", vaultSettings{}, unknownVaultError(vault)
 	}
-	return fmt.Sprintf("http://127.0.0.1:%d", entry.Port), vault, entry, nil
+	return fmt.Sprintf("http://127.0.0.1:%d", entry.Port), vault, settings, nil
 }
 
 // Runs nobs vault SUBCOMMAND and returns the exit code. set starts the vault's
@@ -258,7 +264,7 @@ func runVault(args []string) int {
 			return printCLIError(err)
 		}
 		vault := settings.Vaults[args[0]]
-		if err := startBroker(args[0], vault); err != nil {
+		if err := startBroker(args[0], settings); err != nil {
 			return printCLIError(err)
 		}
 		if err := saveVaultSettings(settings); err != nil {
@@ -269,11 +275,10 @@ func runVault(args []string) int {
 		if len(args) != 1 {
 			return printCLIError(newNOBSError(NOBSErrInvalidArgs, "vault rm requires NAME"))
 		}
-		vault, ok := settings.Vaults[args[0]]
-		if !ok {
+		if _, ok := settings.Vaults[args[0]]; !ok {
 			return printCLIError(unknownVaultError(args[0]))
 		}
-		if err := runCompose(args[0], vault, "down"); err != nil {
+		if err := runCompose(args[0], settings, "down"); err != nil {
 			return printCLIError(err)
 		}
 		delete(settings.Vaults, args[0])
@@ -335,4 +340,45 @@ func runVault(args []string) int {
 	default:
 		return printCLIError(newNOBSError(NOBSErrInvalidArgs, "unknown vault command: %s", command))
 	}
+}
+
+// Runs nobs tls insecure [on|off] and returns the exit code. With no on or
+// off it prints the setting. on and off save it first, then run docker compose
+// up -d for every vault, which replaces each running broker so the change
+// takes effect now. A broker that cannot start, for example because its drive
+// is not mounted, is reported and the command exits nonzero. If that broker is
+// still running it keeps its old environment, because nobs starts a broker
+// again only when it refuses connections, so run the command again once the
+// broker can start.
+func runTLS(args []string) int {
+	if len(args) == 0 || args[0] != "insecure" || len(args) > 2 {
+		return printCLIError(newNOBSError(NOBSErrInvalidArgs, "usage: nobs tls insecure [on|off]"))
+	}
+	settings, err := loadVaultSettings()
+	if err != nil {
+		return printCLIError(err)
+	}
+	code := 0
+	if len(args) == 2 {
+		switch args[1] {
+		case "on", "off":
+			settings.InsecureTLS = args[1] == "on"
+		default:
+			return printCLIError(newNOBSError(NOBSErrInvalidArgs, "tls insecure takes on or off, not %s", args[1]))
+		}
+		if err := saveVaultSettings(settings); err != nil {
+			return printCLIError(err)
+		}
+		for _, name := range slices.Sorted(maps.Keys(settings.Vaults)) {
+			if err := startBroker(name, settings); err != nil {
+				code = printCLIError(newNOBSError(NOBSErrBrokerUnavailable, "vault %s was not restarted: %v; run nobs tls insecure %s again once it can start", name, err, args[1]))
+			}
+		}
+	}
+	if settings.InsecureTLS {
+		fmt.Fprintln(os.Stdout, "on")
+	} else {
+		fmt.Fprintln(os.Stdout, "off")
+	}
+	return code
 }
