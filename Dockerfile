@@ -1,4 +1,6 @@
-FROM golang:1.22-bookworm AS build
+# Keep this Go version the same as the go line in go.mod; the release job
+# stops when they differ, so change both together.
+FROM golang:1.27.2-bookworm AS build
 WORKDIR /src
 COPY go.mod ./
 COPY *.go ./

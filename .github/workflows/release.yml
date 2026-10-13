@@ -5,41 +5,71 @@ name: release
 
 on:
   push:
-    tags: ["v*"]
+    # Only plain version tags such as v1.2.3, the only form nobs accepts as a
+    # release version. A tag such as v1.2.3-rc1 or v1.2.3+build starts no run.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 
 permissions:
   contents: write
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # A fixed Ubuntu release, so a new runner image cannot change the build
+    # until this line changes.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # All branches, so the next step can see main.
+          fetch-depth: 0
           persist-credentials: false
+      - name: Check the tag is on main
+        run: |
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::$GITHUB_REF_NAME is not on main; tag a commit on main"
+            exit 1
+          fi
       # Build with the Go version in go.mod, which the broker image also uses.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: false
+      - name: Check the broker image uses the same Go
+        run: |
+          go_version=$(go list -m -f '{{.GoVersion}}')
+          if ! grep -qx "FROM golang:$go_version-bookworm AS build" Dockerfile; then
+            echo "::error::go.mod says Go $go_version; change the Dockerfile's golang image to match"
+            exit 1
+          fi
       - run: go test ./...
+      # Build outside the checkout. A file left in it, such as the first
+      # binary, makes Go record the next build as modified.
       - name: Build
         env:
           CGO_ENABLED: "0"
           GOOS: linux
         run: |
-          mkdir dist
+          mkdir "$RUNNER_TEMP/dist"
           for arch in amd64 arm64; do
-            GOARCH="$arch" go build -ldflags "-X main.version=$GITHUB_REF_NAME" -o "dist/nobs_linux_$arch" .
+            GOARCH="$arch" go build -ldflags "-X main.version=$GITHUB_REF_NAME" -o "$RUNNER_TEMP/dist/nobs_linux_$arch" .
           done
-          cd dist
+          cd "$RUNNER_TEMP/dist"
           sha256sum nobs_linux_amd64 nobs_linux_arm64 > checksums.txt
+      # Go records the tag and whether the checkout had changes. Stop before
+      # publishing a binary built from anything but the clean tagged commit.
+      - name: Check the build info
+        run: |
+          for arch in amd64 arm64; do
+            go version -m -json "$RUNNER_TEMP/dist/nobs_linux_$arch" | jq -e --arg tag "$GITHUB_REF_NAME" \
+              '.Main.Version == $tag and any(.Settings[]; .Key == "vcs.modified" and .Value == "false")'
+          done
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          cd "$RUNNER_TEMP/dist"
           gh release create "$GITHUB_REF_NAME" \
-            dist/nobs_linux_amd64 dist/nobs_linux_arm64 dist/checksums.txt \
+            nobs_linux_amd64 nobs_linux_arm64 checksums.txt \
             --verify-tag --title "$GITHUB_REF_NAME" \
             --notes "Linux binaries for amd64 and arm64. To check a download: sha256sum -c --ignore-missing checksums.txt"

@@ -165,7 +165,7 @@ func handleSearch(req searchRequest) (searchResponse, error) {
 		return nil
 	})
 	if err != nil && !errors.Is(err, errSearchLimit) {
-		return searchResponse{}, newNOBSError(NOBSErrUnexpected, err.Error())
+		return searchResponse{}, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	if len(resp.Matches) > 50 {
 		resp.Matches = resp.Matches[:50]
@@ -182,7 +182,7 @@ func handleRead(req notePathRequest) (noteResponse, error) {
 	}
 	body, err := os.ReadFile(fullPath)
 	if err != nil {
-		return noteResponse{}, newNOBSError(NOBSErrUnexpected, err.Error())
+		return noteResponse{}, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	return noteResponse{Path: relPath, Body: string(body)}, nil
 }
@@ -216,7 +216,7 @@ func handleDaily(req dailyRequest) (noteResponse, error) {
 	}
 	body, err := os.ReadFile(path)
 	if err != nil {
-		return noteResponse{}, newNOBSError(NOBSErrUnexpected, err.Error())
+		return noteResponse{}, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	return noteResponse{Path: rel, Body: string(body)}, nil
 }
@@ -242,11 +242,11 @@ func handleWrite(req noteWriteRequest, appendMode bool) (noteResponse, error) {
 	}
 	file, err := os.OpenFile(fullPath, flag, 0o644)
 	if err != nil {
-		return noteResponse{}, newNOBSError(NOBSErrUnexpected, err.Error())
+		return noteResponse{}, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	defer file.Close()
 	if _, err := file.WriteString(req.Body); err != nil {
-		return noteResponse{}, newNOBSError(NOBSErrUnexpected, err.Error())
+		return noteResponse{}, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	return noteResponse{Path: relPath, Operation: op, Bytes: len(req.Body)}, nil
 }
@@ -273,11 +273,11 @@ func handleAppendNote(req noteWriteRequest) (noteResponse, error) {
 	}
 	body, err := os.ReadFile(fullPath)
 	if err != nil {
-		return noteResponse{}, newNOBSError(NOBSErrUnexpected, err.Error())
+		return noteResponse{}, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	info, err := os.Stat(fullPath)
 	if err != nil {
-		return noteResponse{}, newNOBSError(NOBSErrUnexpected, err.Error())
+		return noteResponse{}, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 
 	note := string(body)
@@ -319,7 +319,7 @@ func handleAppendNote(req noteWriteRequest) (noteResponse, error) {
 	}
 	updated := note[:insertAt] + wantPrefix + note[insertAt:]
 	if err := atomicWriteFile(fullPath, []byte(updated), info.Mode().Perm()); err != nil {
-		return noteResponse{}, newNOBSError(NOBSErrUnexpected, err.Error())
+		return noteResponse{}, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	return noteResponse{Path: relPath, Operation: "append-note", Bytes: len(normalizedBody), AlreadyPresent: &alreadyPresent}, nil
 }
@@ -362,7 +362,7 @@ func handleMove(req noteMoveRequest) (noteResponse, error) {
 		return noteResponse{}, newNOBSError(NOBSErrForbidden, "move destination already exists")
 	}
 	if err := os.Rename(sourceFull, destinationFull); err != nil {
-		return noteResponse{}, newNOBSError(NOBSErrUnexpected, err.Error())
+		return noteResponse{}, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	return noteResponse{Path: sourceRel, Destination: destinationRel, Operation: "move"}, nil
 }
@@ -382,7 +382,7 @@ func handleDelete(req notePathRequest) (noteResponse, error) {
 		return noteResponse{}, err
 	}
 	if err := os.Rename(sourceFull, trashFull); err != nil {
-		return noteResponse{}, newNOBSError(NOBSErrUnexpected, err.Error())
+		return noteResponse{}, newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	return noteResponse{Path: sourceRel, TrashPath: trashRel, Operation: "delete"}, nil
 }
@@ -410,14 +410,14 @@ func findDailyNote(date string) (string, string, error) {
 		return nil
 	})
 	if err != nil && err != fs.SkipAll {
-		return "", "", newNOBSError(NOBSErrUnexpected, err.Error())
+		return "", "", newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	if fullPath == "" {
 		return "", "", newNOBSError(NOBSErrNotFound, "no daily note found for %s", date)
 	}
 	rel, err := filepath.Rel(vaultDir(), fullPath)
 	if err != nil {
-		return "", "", newNOBSError(NOBSErrUnexpected, err.Error())
+		return "", "", newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	return fullPath, filepath.ToSlash(rel), nil
 }
@@ -435,7 +435,7 @@ func resolveExistingMarkdown(path string) (string, string, error) {
 		if os.IsNotExist(err) {
 			return "", "", newNOBSError(NOBSErrNotFound, "note not found: %s", relPath)
 		}
-		return "", "", newNOBSError(NOBSErrUnexpected, err.Error())
+		return "", "", newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return "", "", newNOBSError(NOBSErrForbidden, "note path is not a regular vault file")
@@ -502,7 +502,7 @@ func ensureSafeParentDirs(fullPath string) error {
 	current := vaultDir()
 	rel, err := filepath.Rel(vaultDir(), filepath.Dir(fullPath))
 	if err != nil {
-		return newNOBSError(NOBSErrUnexpected, err.Error())
+		return newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 	}
 	for _, segment := range strings.Split(rel, string(filepath.Separator)) {
 		if segment == "." || segment == "" {
@@ -512,12 +512,12 @@ func ensureSafeParentDirs(fullPath string) error {
 		info, err := os.Lstat(current)
 		if os.IsNotExist(err) {
 			if err := os.Mkdir(current, 0o755); err != nil {
-				return newNOBSError(NOBSErrUnexpected, err.Error())
+				return newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 			}
 			continue
 		}
 		if err != nil {
-			return newNOBSError(NOBSErrUnexpected, err.Error())
+			return newNOBSError(NOBSErrUnexpected, "%s", err.Error())
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return newNOBSError(NOBSErrForbidden, "parent path is not a safe directory")

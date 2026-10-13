@@ -9,7 +9,7 @@ Agents can pass the full path that `nobs find` prints straight to `nobs read`. O
 Each release from `v0.3.1` on has Linux binaries for amd64 and arm64 and a `checksums.txt`. Download the binary for your computer, check it, and put it on your `PATH`:
 
 ```sh
-VERSION=v0.3.1
+VERSION=v0.3.2
 ARCH=amd64   # or arm64
 curl -fLO "https://github.com/henrico813/nobs/releases/download/$VERSION/nobs_linux_$ARCH"
 curl -fLO "https://github.com/henrico813/nobs/releases/download/$VERSION/checksums.txt"
@@ -20,18 +20,22 @@ install -D -m 755 "nobs_linux_$ARCH" ~/.local/bin/nobs
 With Go installed, `go install` builds the same release, and works for earlier tags too:
 
 ```sh
-go install github.com/henrico813/nobs@v0.3.1
+go install github.com/henrico813/nobs@v0.3.2
 ```
+
+From `v0.3.2` on, `go install` needs Go 1.27.2, or Go 1.21 or later with the default `GOTOOLCHAIN=auto`, which downloads it.
 
 Both kinds of release know their version, so they start a broker of that version (see "Brokers on a computer"). A local `go build` of an untagged commit does not, and needs `NOBS_VERSION`.
 
 ## Releases
 
-Pushing a tag such as `v0.3.2` runs `.github/workflows/release.yml`. It runs `go test ./...`, builds both binaries with the tag stamped in, and publishes them with `checksums.txt` as a GitHub release. Pushing a tag publishes a release, so push one only when `main` is ready. A binary built by hand the same way also knows its version. Build it from the tagged commit, because the broker image is built from the tag; a stamp on other code starts an image that does not match the binary:
+Pushing a tag such as `v1.2.3` runs `.github/workflows/release.yml`. Only plain `vX.Y.Z` tags run it, the only form `nobs` accepts as a release version; a tag such as `v1.2.3-rc1` publishes nothing. The job stops unless the tagged commit is on `main`. It runs `go test ./...`, builds both binaries with the tag stamped in, checks that Go recorded the tag and no local changes, and publishes them with `checksums.txt` as a GitHub release. Pushing a tag publishes a release, so push one only when `main` is ready. A binary built by hand the same way also knows its version. Build it from the tagged commit, because the broker image is built from the tag; a stamp on other code starts an image that does not match the binary:
 
 ```sh
 CGO_ENABLED=0 go build -ldflags "-X main.version=v0.3.2" -o nobs .
 ```
+
+The `go` line in `go.mod` and the `golang` image in the `Dockerfile` name the same Go release, and the job stops when they differ, so change both together.
 
 ## Broker settings
 
