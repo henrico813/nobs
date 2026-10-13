@@ -32,8 +32,8 @@ func newSyncStatusResponse(configured bool, status string, detail string) syncSt
 }
 
 // liveHealth verifies the vault service can answer sync commands before traffic reaches it.
-// It writes nothing to the vault, because nobs vault list calls /livez for
-// every vault and /livez does not wait for a running sync.
+// It writes nothing to the vault, because workstation vaults are git
+// repositories and nobs vault list calls /livez for every vault.
 func liveHealth() error {
 	if err := checkVaultMounted(); err != nil {
 		return err

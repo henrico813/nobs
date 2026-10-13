@@ -80,7 +80,7 @@ nobs vault set NAME PATH
 
 Every `nobs` command that may start a broker, including later ones, needs the same `NOBS_VERSION`. Run `nobs vault set` again after changing versions to replace the broker.
 
-Health checks, `find`, `search`, `rg` and `sync-status` create no files in the vault. Only `nobs health` (through `/readyz`) and `apply-patch` briefly create `.nobs-write-probe` to check that the vault is writable.
+`/livez`, `/configz`, `find`, `search`, `rg` and `sync-status` create no files in the vault. Only `nobs health` (through `/readyz`) and `apply-patch` briefly create `.nobs-write-probe` to check that the vault is writable.
 
 ## Finding notes
 

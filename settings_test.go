@@ -391,61 +391,75 @@ func TestVaultSetAndRmFollowDocker(t *testing.T) {
 }
 
 // After a restart, a broker whose drive was not mounted yet stays down, and
-// Docker does not retry it. The first command must start it once and send the
-// request again, and a start that fails must not be tried again.
+// Docker does not retry it. A refused connection must start the broker once
+// and send the request again. A connection that was opened must never be
+// resent, because the broker may already have run the edit.
 func TestStoppedBrokerStartsOnceThenRetries(t *testing.T) {
-	tests := []struct {
-		name       string
-		dockerExit int
-		wantCode   int
-	}{
-		{name: "start works", dockerExit: 0, wantCode: 0},
-		{name: "start fails", dockerExit: 1, wantCode: int(NOBSErrBrokerUnavailable)},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			settings := useTempSettings(t)
-			brokerStartWait = 5 * time.Second
-			port := closedPort(t)
-			writeSettings(t, settings, fmt.Sprintf(`{"default":"main","vaults":{"main":{"path":%q,"port":%d}}}`, makeVault(t), port))
-			// docker creates started, then waits for serving before it exits, so
-			// the stand-in broker below is up even when docker fails. A retry
-			// after a failed start would then succeed and the test would see it.
-			dir := t.TempDir()
-			started, serving := filepath.Join(dir, "started"), filepath.Join(dir, "serving")
-			log := useFakeDocker(t, fmt.Sprintf("touch %q\nwhile [ ! -e %q ]; do sleep 0.01; done\nexit %d", started, serving, tt.dockerExit))
-			// Stands in for the container: answers on the port once docker runs.
-			broker := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				writeBrokerJSON(w, findResponse{Status: "found", Path: "from started broker"})
-			})}
-			t.Cleanup(func() { broker.Close() })
-			go func() {
-				for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-					if _, err := os.Stat(started); err == nil {
-						listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-						_ = os.WriteFile(serving, nil, 0o644)
-						if err == nil {
-							broker.Serve(listener)
-						}
-						return
+	t.Run("start works", func(t *testing.T) {
+		settings := useTempSettings(t)
+		brokerStartWait = 5 * time.Second
+		port := closedPort(t)
+		writeSettings(t, settings, fmt.Sprintf(`{"default":"main","vaults":{"main":{"path":%q,"port":%d}}}`, makeVault(t), port))
+		started := filepath.Join(t.TempDir(), "started")
+		log := useFakeDocker(t, fmt.Sprintf("touch %q\nexit 0", started))
+		// Stands in for the container: answers on the port once docker runs.
+		broker := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeBrokerJSON(w, findResponse{Status: "found", Path: "from started broker"})
+		})}
+		t.Cleanup(func() { broker.Close() })
+		go func() {
+			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+				if _, err := os.Stat(started); err == nil {
+					if listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port)); err == nil {
+						broker.Serve(listener)
 					}
+					return
 				}
-			}()
+			}
+		}()
 
-			code, stdout := captureStdout(t, func() int { return runMain([]string{"find", "Plan"}) })
+		code, stdout := captureStdout(t, func() int { return runMain([]string{"find", "Plan"}) })
 
-			if code != tt.wantCode {
-				t.Fatalf("exit code = %d, want %d (output %q)", code, tt.wantCode, stdout)
+		if code != 0 || !strings.Contains(stdout, "from started broker") {
+			t.Fatalf("exit code = %d, output %q; want 0 and output from the started broker", code, stdout)
+		}
+		calls := dockerCalls(t, log)
+		if len(calls) != 1 || !strings.HasPrefix(calls[0], "compose -p nobs-main -f - up -d ") {
+			t.Fatalf("docker calls = %q, want one compose up -d for nobs-main", calls)
+		}
+	})
+
+	t.Run("connection dropped", func(t *testing.T) {
+		settings := useTempSettings(t)
+		log := useFakeDocker(t, "exit 0")
+		// Stands in for a broker that received the request and died before
+		// answering.
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { listener.Close() })
+		go func() {
+			for {
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				conn.Close()
 			}
-			if tt.wantCode == 0 && !strings.Contains(stdout, "from started broker") {
-				t.Fatalf("output %q did not come from the started broker", stdout)
-			}
-			calls := dockerCalls(t, log)
-			if len(calls) != 1 || !strings.HasPrefix(calls[0], "compose -p nobs-main -f - up -d ") {
-				t.Fatalf("docker calls = %q, want one compose up -d for nobs-main", calls)
-			}
-		})
-	}
+		}()
+		port := listener.Addr().(*net.TCPAddr).Port
+		writeSettings(t, settings, fmt.Sprintf(`{"default":"main","vaults":{"main":{"path":%q,"port":%d}}}`, makeVault(t), port))
+
+		code, stdout := captureStdout(t, func() int { return runMain([]string{"find", "Plan"}) })
+
+		if code != int(NOBSErrBrokerUnavailable) {
+			t.Fatalf("exit code = %d, want %d (output %q)", code, NOBSErrBrokerUnavailable, stdout)
+		}
+		if calls := dockerCalls(t, log); len(calls) != 0 {
+			t.Fatalf("docker ran after the broker received the request: %q", calls)
+		}
+	})
 }
 
 // NOBS_BROKER_URL names a broker this computer does not run, such as the one

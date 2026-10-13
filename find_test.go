@@ -116,10 +116,10 @@ func TestFindPicksNoteByMatchRules(t *testing.T) {
 }
 
 // Reads and health checks must not create files in the vault: workstation
-// vaults are git repositories, a sync can upload a stray file, and nobs vault
-// list calls /livez on every vault. In a read-only vault a write that a route
-// depends on, such as readyHealth's write probe, fails, so success shows the
-// route needs none.
+// vaults are git repositories, the README promises these routes create no
+// files, and nobs vault list calls /livez on every vault. In a read-only
+// vault a write that a route depends on, such as readyHealth's write probe,
+// fails, so success shows the route needs none.
 func TestReadRoutesNeverWriteToVault(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("OBSIDIAN_VAULT_DIR", root)
