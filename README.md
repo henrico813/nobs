@@ -4,24 +4,33 @@ nobs is a small broker and CLI for one Obsidian vault. Run `nobs service` where 
 
 Agents can pass the full path that `nobs find` prints straight to `nobs read`. Other commands that take a note path need it relative to the vault, such as `Projects/Plan.md`, and reject absolute paths.
 
-## Build and install
+## Install
 
-Build a local binary:
+Each release from `v0.3.1` on has Linux binaries for amd64 and arm64 and a `checksums.txt`. Download the binary for your computer, check it, and put it on your `PATH`:
 
 ```sh
-go build -o nobs .
+VERSION=v0.3.1
+ARCH=amd64   # or arm64
+curl -fLO "https://github.com/henrico813/nobs/releases/download/$VERSION/nobs_linux_$ARCH"
+curl -fLO "https://github.com/henrico813/nobs/releases/download/$VERSION/checksums.txt"
+sha256sum -c --ignore-missing checksums.txt
+install -D -m 755 "nobs_linux_$ARCH" ~/.local/bin/nobs
 ```
 
-Install a tagged release:
+With Go installed, `go install` builds the same release, and works for earlier tags too:
 
 ```sh
-go install github.com/henrico813/nobs@v0.2.0
+go install github.com/henrico813/nobs@v0.3.1
 ```
 
-Build the broker image:
+Both kinds of release know their version, so they start a broker of that version (see "Brokers on a computer"). A local `go build` of an untagged commit does not, and needs `NOBS_VERSION`.
+
+## Releases
+
+Pushing a tag such as `v0.3.2` runs `.github/workflows/release.yml`. It runs `go test ./...`, builds both binaries with the tag stamped in, and publishes them with `checksums.txt` as a GitHub release. Pushing a tag publishes a release, so push one only when `main` is ready. A binary built by hand the same way also knows its version. Build it from the tagged commit, because the broker image is built from the tag; a stamp on other code starts an image that does not match the binary:
 
 ```sh
-docker build -t nobs:v0.2.0 .
+CGO_ENABLED=0 go build -ldflags "-X main.version=v0.3.2" -o nobs .
 ```
 
 ## Broker settings
@@ -70,7 +79,7 @@ Each vault gets one broker container, run with Docker Compose as project `nobs-N
 
 When a command uses a vault's broker (through `--vault` or the default vault) and cannot connect, `nobs` runs `docker compose up -d` once, waits up to 10 seconds for the broker, and sends the request again. This starts a broker that could not start at boot because its drive was not mounted yet. A broker from `NOBS_BROKER_URL` is never started.
 
-The broker image is `nobs:VERSION`, built from this repository's `VERSION` tag the first time it is needed, which can take a few minutes. VERSION is the version of the `nobs` you run, so `go install github.com/henrico813/nobs@v0.3.0` runs `nobs:v0.3.0`. A build that is not a release, such as `go build` on an untagged commit, needs `NOBS_VERSION`. To try a local change, build the image and name it:
+The broker image is `nobs:VERSION`, built from this repository's `VERSION` tag the first time it is needed, which can take a few minutes. VERSION is `NOBS_VERSION` when it is set. Otherwise it is the version of the `nobs` you run: the tag stamped into a release binary, or the version `go install` records, so the `v0.3.1` release binary and `go install github.com/henrico813/nobs@v0.3.1` both run `nobs:v0.3.1`. A build that is not a release, such as `go build` on an untagged commit, needs `NOBS_VERSION`. To try a local change, build the image and name it:
 
 ```sh
 docker build -t nobs:dev .

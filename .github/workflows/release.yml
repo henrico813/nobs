@@ -1,0 +1,45 @@
+# Publishes a GitHub release with Linux binaries when a version tag is pushed.
+# Each binary has its tag stamped in, so it starts a broker image of the same
+# version without NOBS_VERSION. The tests run first; a failure publishes nothing.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Build with the Go version in go.mod, which the broker image also uses.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: go test ./...
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+        run: |
+          mkdir dist
+          for arch in amd64 arm64; do
+            GOARCH="$arch" go build -ldflags "-X main.version=$GITHUB_REF_NAME" -o "dist/nobs_linux_$arch" .
+          done
+          cd dist
+          sha256sum nobs_linux_amd64 nobs_linux_arm64 > checksums.txt
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/nobs_linux_amd64 dist/nobs_linux_arm64 dist/checksums.txt \
+            --verify-tag --title "$GITHUB_REF_NAME" \
+            --notes "Linux binaries for amd64 and arm64. To check a download: sha256sum -c --ignore-missing checksums.txt"

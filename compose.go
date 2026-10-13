@@ -57,18 +57,27 @@ var brokerStartWait = 10 * time.Second
 
 var releaseVersion = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
+// The release tag, such as v1.2.3. The release workflow sets it with
+// go build -ldflags "-X main.version=v1.2.3"; it is empty unless a build
+// stamps it.
+var version string
+
 // Returns the broker image's version, which is also the git tag it is built
-// from. A binary from go install github.com/henrico813/nobs@v1.2.3 reports
-// v1.2.3, so it starts a broker of its own version. NOBS_VERSION overrides it,
-// for a local build or an image built by hand.
+// from. NOBS_VERSION wins, for a local build or an image built by hand. Then
+// comes the tag stamped into a release binary, then the version Go records
+// for go install github.com/henrico813/nobs@v1.2.3, so either kind of release
+// starts a broker of its own version.
 func brokerVersion() (string, error) {
-	if version := strings.TrimSpace(os.Getenv("NOBS_VERSION")); version != "" {
+	if override := strings.TrimSpace(os.Getenv("NOBS_VERSION")); override != "" {
+		return override, nil
+	}
+	if version != "" {
 		return version, nil
 	}
 	if info, ok := debug.ReadBuildInfo(); ok && releaseVersion.MatchString(info.Main.Version) {
 		return info.Main.Version, nil
 	}
-	return "", newNOBSError(NOBSErrBrokerUnavailable, "this nobs is not a release, so it does not know which broker image to run; install one with go install github.com/henrico813/nobs@VERSION, or set NOBS_VERSION to the tag of an image you built")
+	return "", newNOBSError(NOBSErrBrokerUnavailable, "this nobs has no release version, so it does not know which broker image to run; install a release binary from https://github.com/henrico813/nobs/releases, or run go install github.com/henrico813/nobs@VERSION, or set NOBS_VERSION to the tag of an image you built")
 }
 
 // Runs docker compose for the named vault's broker (project nobs-NAME) with
@@ -76,7 +85,7 @@ func brokerVersion() (string, error) {
 // as it runs and Docker's reason when it fails, such as a port in use or a
 // failed build.
 func runCompose(name string, vault vaultEntry, args ...string) error {
-	version, err := brokerVersion()
+	tag, err := brokerVersion()
 	if err != nil {
 		return err
 	}
@@ -91,7 +100,7 @@ func runCompose(name string, vault vaultEntry, args ...string) error {
 	// nobs passes the user and group IDs because the shell does not export UID.
 	// ob keeps its settings in the same config folder as nobs.
 	cmd.Env = append(os.Environ(),
-		"NOBS_VERSION="+version,
+		"NOBS_VERSION="+tag,
 		"NOBS_UID="+strconv.Itoa(os.Getuid()),
 		"NOBS_GID="+strconv.Itoa(os.Getgid()),
 		"NOBS_VAULT_PATH="+vault.Path,
