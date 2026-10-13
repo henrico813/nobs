@@ -45,20 +45,42 @@ With none of them, commands fail and say to run `nobs vault set`.
 `nobs vault` keeps the vaults on this computer in `$XDG_CONFIG_HOME/nobs/config.json`, or `~/.config/nobs/config.json` when `XDG_CONFIG_HOME` is unset or not an absolute path. Change it only with these commands:
 
 ```sh
-nobs vault set NAME PATH     # add a vault or change its folder
-nobs vault rm NAME           # remove a vault from the list
-nobs vault list              # JSON list of name, path and port
+nobs vault set NAME PATH     # add a vault or change its folder, and start its broker
+nobs vault rm NAME           # stop and remove its broker, and remove the vault
+nobs vault list              # JSON list of name, path, port and running
 nobs vault path [NAME]       # the vault's folder; the default vault without NAME
 nobs vault default [NAME]    # show or change the default vault
 ```
 
-These commands only change the settings file; they do not start or stop brokers.
-
 - Names start with a lowercase letter and use only lowercase letters, digits and hyphens.
 - `PATH` must be absolute and contain `.obsidian/`. It is stored as given, without resolving links.
-- `set` gives a new vault the lowest port from 8781 up that no other vault uses. Changing a vault's folder keeps its port, and a port freed by `rm` is used again.
+- `set` gives a new vault the lowest port from 8781 up that no other vault uses and nothing on `127.0.0.1` listens on. Changing a vault's folder keeps its port, and a port freed by `rm` is used again.
 - When there is no default, the vault being set becomes the default. Removing the default vault leaves no default.
 - Commands refuse a settings file with unknown keys, bad names, relative paths, shared ports or a default that is not listed.
+
+## Brokers on a computer
+
+Each vault gets one broker container, run with Docker Compose as project `nobs-NAME`. The Compose file is built into `nobs`. `set` runs `docker compose up -d` and `rm` runs `docker compose down`; the settings file changes only after Docker succeeds. Docker's output goes to stderr.
+
+- The broker listens on `127.0.0.1` only, at the vault's port. It has no password.
+- The vault is mounted at the same path it has on the computer, because `ob` finds a vault's sync setup by its folder path. `ob`'s settings folder, `obsidian-headless` next to the `nobs` config folder, is shared with every broker.
+- Docker never creates a missing vault folder. If the drive is not mounted, the broker does not start.
+- The broker runs as the user who ran `nobs`, so new files belong to them.
+- `running` in `vault list` is true when the broker answers on its port.
+
+When a command uses a vault's broker (through `--vault` or the default vault) and cannot connect, `nobs` runs `docker compose up -d` once, waits up to 10 seconds for the broker, and sends the request again. This starts a broker that could not start at boot because its drive was not mounted yet. A broker from `NOBS_BROKER_URL` is never started.
+
+The broker image is `nobs:VERSION`, built from this repository's `VERSION` tag the first time it is needed, which can take a few minutes. VERSION is the version of the `nobs` you run, so `go install github.com/henrico813/nobs@v0.3.0` runs `nobs:v0.3.0`. A build that is not a release, such as `go build` on an untagged commit, needs `NOBS_VERSION`. To try a local change, build the image and name it:
+
+```sh
+docker build -t nobs:dev .
+export NOBS_VERSION=dev
+nobs vault set NAME PATH
+```
+
+Every `nobs` command that may start a broker, including later ones, needs the same `NOBS_VERSION`. Run `nobs vault set` again after changing versions to replace the broker.
+
+Health checks, `find`, `search`, `rg` and `sync-status` create no files in the vault. Only `nobs health` (through `/readyz`) and `apply-patch` briefly create `.nobs-write-probe` to check that the vault is writable.
 
 ## Finding notes
 

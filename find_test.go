@@ -115,14 +115,22 @@ func TestFindPicksNoteByMatchRules(t *testing.T) {
 	}
 }
 
-// find must not create files in the vault: workstation vaults are git
-// repositories, and a stray file shows up as a change. In a read-only vault a
-// write that find depends on, such as readyHealth's write probe, fails, so a
-// successful find shows it needs none.
-func TestFindRouteNeverWritesToVault(t *testing.T) {
+// Reads and health checks must not create files in the vault: workstation
+// vaults are git repositories, a sync can upload a stray file, and nobs vault
+// list calls /livez on every vault. In a read-only vault a write that a route
+// depends on, such as readyHealth's write probe, fails, so success shows the
+// route needs none.
+func TestReadRoutesNeverWriteToVault(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("OBSIDIAN_VAULT_DIR", root)
+	t.Setenv("NOBS_VAULT_IS_MOUNTED", "")
 	writeNotes(t, root, "ABC-110 Move config.md")
+	// /livez also checks that ob is installed.
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "ob"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	if err := os.Chmod(root, 0o555); err != nil {
 		t.Fatal(err)
 	}
@@ -130,13 +138,25 @@ func TestFindRouteNeverWritesToVault(t *testing.T) {
 	if os.WriteFile(filepath.Join(root, "write-check"), nil, 0o644) == nil {
 		t.Skip("read-only folders are writable for this user")
 	}
+	tests := []struct {
+		method string
+		route  string
+		body   string
+	}{
+		{method: http.MethodPost, route: "/find", body: `{"ref":"ABC-110"}`},
+		{method: http.MethodPost, route: "/search", body: `{"query":"note"}`},
+		{method: http.MethodGet, route: "/livez"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.route, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(tt.method, tt.route, strings.NewReader(tt.body))
+			newBrokerMux().ServeHTTP(rec, req)
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/find", strings.NewReader(`{"ref":"ABC-110"}`))
-	newBrokerMux().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 
